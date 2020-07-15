@@ -4,14 +4,21 @@ defmodule OneWord.Game do
 	alias Nostrum.Api
 	alias Nostrum.Struct.Embed
 	alias Nostrum.Struct.User
+	alias OneWord.GameHandler
 
 	# ~Client~
 	def start_link(config) do
 		GenServer.start_link(__MODULE__, config)
 	end
 
-	def update(game_pid, {:add_word, %Nostrum.Struct.Message{} = _message} = data) when is_pid(game_pid) do
-		GenServer.call(game_pid, data)
+	def add_word(game_pid, %Nostrum.Struct.Message{} = message) when is_pid(game_pid) do
+		case GenServer.call(game_pid, {:add_word, message}) do
+			{:ok, updated} ->
+				GameHandler.update_game(updated.game_id, updated)
+				updated
+			error ->
+				{:error, error}
+		end
 	end
 
 	### Won't need this unless we need players added mid-game.
@@ -19,17 +26,21 @@ defmodule OneWord.Game do
 	# 	GenServer.call(game_pid, data)
 	# end
 
-	def update(game_pid, {:update_state, _state} = data) when is_pid(game_pid) do
-		GenServer.call(game_pid, data)
+	def update_state(game_pid, state) when is_pid(game_pid) and is_map(state) do
+		case GenServer.call(game_pid, {:update_state, state}) do
+			{:ok, updated} ->
+				GameHandler.update_game(updated.game_id, updated)
+				updated
+			error ->
+				{:error, error}
+		end
 	end
 
-	def update(game_pid, {:start_game, author_id} = data) when is_pid(game_pid) do
-		GenServer.call(game_pid, data)
+	def start_game(game_pid, author_id) when is_pid(game_pid) do
+		GenServer.call(game_pid, {:start_game, author_id})
 	end
 
-	def update(_game_pid, _), do: :noop
-
-	def stop_game(game_pid, author_id) do
+	def stop_game(game_pid, author_id) when is_pid(game_pid) do
 		GenServer.call(game_pid, {:end_game, author_id})
 	end
 
@@ -49,16 +60,17 @@ defmodule OneWord.Game do
 
 	def handle_call({:add_word, %{content: new_content} = message}, _from, %{game_id: game_id, embed_message_id: message_id} = game_info) do
 		with :ok <- validate_new_content(message, game_info),
-			{:ok, story} <- Map.fetch(game_info, :story)
+			{:ok, story} <- Map.fetch(game_info, :story),
+			{joiner, double_quotes} <- join_punctuation(new_content, game_info.double_quotes)
 			do
-				new_story = String.trim("#{story} #{new_content}")
-				new_game_info = game_info |> Map.put(:story, new_story) |> Map.update!(:user_turn_queue, fn [first | rest] -> rest ++ [first] end)
+				new_story = String.trim("#{story}#{joiner}#{new_content}")
+				new_game_info = game_info |> Map.put(:story, new_story) |> Map.put(:double_quotes, double_quotes) |> Map.update!(:users, fn [first | rest] -> rest ++ [first] end)
 
 				Api.delete_message(message)
 				if String.contains?(strip_grammar(new_story), game_info.end_keywords) do
 					end_game(game_id, new_game_info)
 				else
-					Api.edit_message(game_id, message_id, embed: story_embed(game_info.title, new_story, new_game_info.user_turn_queue))
+					Api.edit_message(game_id, message_id, embed: story_embed(game_info.title, new_story, new_game_info.users))
 					{:reply, {:ok, new_game_info}, new_game_info}
 				end
 			else
@@ -107,18 +119,26 @@ defmodule OneWord.Game do
 		if latest_state.story != "", do: Api.create_message(game_id, "**#{latest_state.title}** by #{Enum.map(latest_state.users, &Map.get(&1, :username)) |> Enum.join(", ")}\n#{latest_state.story}")
 		if latest_state.embed_message_id != nil, do: Api.delete_message(game_id, latest_state.embed_message_id)
 		if latest_state.setup_pid != nil, do: Process.exit(latest_state.setup_pid, :normal)
-		{:stop, :normal, :game_ended, latest_state}
+		{:stop, :normal, :ok, latest_state}
 	end
 
 	defp validate_new_content(%{content: new_content, author: author}, game_info) do
-		if is_nil(game_info.setup_pid) and
-			((:no_order in game_info.options and Enum.any?(game_info.users, fn user -> user.id == author.id end) == true) or List.first(game_info.user_turn_queue).id == author.id) and
-			String.contains?(new_content, " ") == false,
+		if game_info.setup_pid == nil and
+		(new_content |> strip_grammar() |> String.trim() |> String.contains?(" ") == false) and
+		((:no_order in game_info.options and Enum.any?(game_info.users, fn user -> user.id == author.id end) == true) or List.first(game_info.users).id == author.id),
 			do: :ok,
 			else:	:invalid
 	end
 
 	defp strip_grammar(string) do
 		string |> String.downcase() |> String.replace(~r/[!?.,:;'"]/, "")
+	end
+
+	defp join_punctuation(content, double_quotes) do
+
+		joiner = (String.starts_with?(content, ["!", "?", ",", ".", ":", ";"]) or (String.starts_with?(content, "\"") and rem(double_quotes, 2) == 1)) && "" || " "
+		new_double_quotes = (String.graphemes(content) |> Enum.reduce(0, &(&1 == "\"" && &2 + 1 || &2))) + double_quotes
+
+		{joiner, new_double_quotes}
 	end
 end

@@ -4,7 +4,7 @@ defmodule OneWord.Command.Story do
 	@player_wait_time 10_000
 
 	alias Nostrum.Api
-	alias OneWord.GameHandler
+	alias OneWord.{GameHandler, Game}
 
 	require Logger
 
@@ -22,18 +22,21 @@ defmodule OneWord.Command.Story do
 	defp start_story(%{channel_id: channel_id} = message, title) do
 
 		with task <- Task.async(fn -> gather_players(message.channel_id) end),
-			:ok <- register_game(message, title, task.pid),
+			{:ok, game_state} <- register_game(message, title, task.pid),
 			{:ok, users} <- Task.await(task, :infinity)
 		do
 			game_embed = OneWord.Game.story_embed(title, "Waiting for first word...", users)
 			{:ok, game_embed_message} = Api.create_message(channel_id, embed: game_embed)
-			GameHandler.update_game(channel_id, {:update_state, %{users: users, user_turn_queue: users, embed_message_id: game_embed_message.id, setup_pid: nil}})
+			Game.update_state(game_state.pid, %{users: users, embed_message_id: game_embed_message.id, setup_pid: nil})
 		else
 			:not_enough_players ->
 				GameHandler.stop_game(channel_id, message.author.id)
 				Api.create_message(channel_id, "Not enough players signed up. Use !story to try again.")
-			:game_in_progress ->
+			:already_exists ->
 				Api.create_message(channel_id, "A game is already in progress in this channel!")
+			:error ->
+				Api.create_message(channel_id, "An internal error has occured, and the developer has been notified.")
+				Logger.error("GameHandler.get_game/1 returned :error while creating a new story.")
 			%Nostrum.Error.ApiError{} = e ->
 				Api.create_message(channel_id, "API Error: #{inspect e}")
 				Logger.error(e)
@@ -56,8 +59,8 @@ defmodule OneWord.Command.Story do
 	end
 
 	defp get_reactions(channel_id, message_id) do
-		_ = Api.delete_own_reaction(channel_id, message_id, "👍")
 		{:ok, users} = Api.get_reactions(channel_id, message_id, "👍")
+		users = Enum.filter(users, fn user -> user.bot == nil end)
 
 		if length(users) < 2 do
 			:not_enough_players
@@ -71,20 +74,20 @@ defmodule OneWord.Command.Story do
 		GameHandler.new_game(channel_id,
 			%{
 				game_id: channel_id,
-				setup_pid: setup_pid,
 				author_id: author.id,
+				setup_pid: setup_pid,
 				users: [],
-				user_turn_queue: [],
 				embed_message_id: nil,
 				title: title,
 				story: "",
 				end_keywords: ["the end"],
+				double_quotes: 0,
 				options: []
 			}
 		)
 	end
 
 	def help(message) do
-		Api.create_message(message.channel_id, "**!story [story title]**\n<> = one word argument, \"\" = multi-word argument, [] = optional argument")
+		Api.create_message(message.channel_id, "Start a story with an optional title. Usage: !story [optional title]")
 	end
 end

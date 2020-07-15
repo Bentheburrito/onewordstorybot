@@ -23,11 +23,13 @@ defmodule OneWord.Command do
 
 	defp run_command("help", args, message) do
 		module = OneWord.CommandList.get_command_by_name("help")
-		if module != :notacommand, do: apply(module, :help, [message, args])
+		if module != :notacommand, do: apply(module, :help, [message, args]),
+		else: :notacommand
 	end
 	defp run_command(name, args, message) do
 		module = OneWord.CommandList.get_command_by_name(name)
-		if module != :notacommand, do: apply(module, :run, [message, args])
+		if module != :notacommand, do: apply(module, :run, [message, args]),
+		else: :notacommand
 	end
 
 	# Extracts the command name and args into a list, like `[name | args]`.

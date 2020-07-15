@@ -9,9 +9,9 @@ defmodule OneWord.Client do
 
 	def handle_event({:MESSAGE_CREATE, message, _ws_state}) do
 		if (!message.author.bot) do
-			if OneWord.Command.handle_message(message) == :notacommand do
-				OneWord.GameHandler.update_game(message.channel_id, {:add_word, message})
-			end
+			with :notacommand <- OneWord.Command.handle_message(message),
+				{:ok, game} <- OneWord.GameHandler.get_game(message.channel_id),
+				do: OneWord.Game.add_word(game.pid, message)
 		end
 
 		if Enum.random(1..40) == 1, do: Api.create_reaction(message.channel_id, message.id, Enum.random(["thonk:381325006761754625", "🤔", "😂", "😭"]))
