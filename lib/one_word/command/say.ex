@@ -5,11 +5,13 @@ defmodule OneWord.Command.Say do
 
 	@impl OneWord.Command
 	def run(message, args) do
-		case Api.delete_message(message) do
-			{:error, e} -> IO.puts(e.response.message)
-			_ -> nil
+		if message.author.id == 254728052070678529 do
+			case Api.delete_message(message) do
+				{:error, e} -> IO.puts(e.response.message)
+				_ -> nil
+			end
+			Api.create_message(message.channel_id, Enum.join(args, " "))
 		end
-		Api.create_message(message.channel_id, Enum.join(args, " "))
 	end
 
 	@impl OneWord.Command

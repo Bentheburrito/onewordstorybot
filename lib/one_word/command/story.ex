@@ -1,7 +1,7 @@
 defmodule OneWord.Command.Story do
 	@behaviour OneWord.Command
 
-	@player_wait_time 10_000
+	@player_wait_time Mix.env() == :prod && 120_000 || 10_000
 
 	alias Nostrum.Api
 	alias OneWord.{GameHandler, Game}
